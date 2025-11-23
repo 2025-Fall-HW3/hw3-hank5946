@@ -51,7 +51,7 @@ class MyPortfolio:
     NOTE: You can modify the initialization function
     """
 
-    def __init__(self, price, exclude, lookback=50, gamma=0):
+    def __init__(self, price, exclude, lookback=60, gamma=0):
         self.price = price
         self.returns = price.pct_change().fillna(0)
         self.exclude = exclude
@@ -70,8 +70,73 @@ class MyPortfolio:
         """
         TODO: Complete Task 4 Below
         """
+        m = len(assets)
+        # 回到之前表現最好的策略思路
+        equal_weight = 1.0 / m
         
+        for i in range(len(self.price.index)):
+            date = self.price.index[i]
+            
+            if i < 126:  # 6個月數據累積
+                self.portfolio_weights.loc[date, assets] = equal_weight
+                continue
+                
+            try:
+                # 使用多時間窗口 (之前0.95夏普比率的配置)
+                short_data = self.returns.iloc[max(0, i-63):i][assets]    # 3個月
+                medium_data = self.returns.iloc[max(0, i-126):i][assets]  # 6個月
+                
+                # 計算收益和波動
+                returns_3m = (1 + short_data).prod() - 1
+                returns_6m = (1 + medium_data).prod() - 1
+                volatility_3m = short_data.std()
+                volatility_6m = medium_data.std()
+                
+                # 避免極端值
+                volatility_3m = volatility_3m.clip(lower=volatility_3m.quantile(0.15))
+                volatility_6m = volatility_6m.clip(lower=volatility_6m.quantile(0.15))
+                
+                # 計算夏普比率 (70% 3個月 + 30% 6個月)
+                sharpe_3m = returns_3m / (volatility_3m + 1e-8)
+                sharpe_6m = returns_6m / (volatility_6m + 1e-8)
+                combined_sharpe = 0.7 * sharpe_3m + 0.3 * sharpe_6m
+                
+                # 選擇前3-4個夏普比率最高的資產
+                positive_sharpe = combined_sharpe[combined_sharpe > 0]
+                
+                if len(positive_sharpe) >= 3:
+                    top_assets = positive_sharpe.nlargest(4)
+                    # 根據夏普比率大小分配權重
+                    total_sharpe = top_assets.sum()
+                    weights = pd.Series(0.0, index=assets)
+                    for asset in top_assets.index:
+                        weights[asset] = top_assets[asset] / total_sharpe
+                    
+                    # 權重約束：單一資產不超過40%
+                    weights = weights.clip(upper=0.4)
+                    weights = weights / weights.sum()
+                    
+                else:
+                    # 沒有足夠正夏普，使用低波動策略
+                    low_vol_assets = volatility_3m.nsmallest(4)
+                    weights = pd.Series(0.0, index=assets)
+                    for asset in low_vol_assets.index:
+                        weights[asset] = 1.0 / len(low_vol_assets)
+                
+                # 確保權重有效
+                weights = weights.fillna(0)
+                if weights.sum() == 0:
+                    weights = pd.Series(equal_weight, index=assets)
+                else:
+                    weights = weights / weights.sum()
+                    
+                self.portfolio_weights.loc[date, assets] = weights.values
+                
+            except Exception as e:
+                self.portfolio_weights.loc[date, assets] = equal_weight
         
+        self.portfolio_weights[self.exclude] = 0.0
+
         """
         TODO: Complete Task 4 Above
         """
